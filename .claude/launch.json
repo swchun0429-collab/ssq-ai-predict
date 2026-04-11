@@ -1,0 +1,53 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "初始化数据（init）",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["main.py", "init"],
+      "port": 3000
+    },
+    {
+      "name": "生成预测（predict）",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["main.py", "predict"],
+      "port": 0
+    },
+    {
+      "name": "增量更新（update）",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["main.py", "update"],
+      "port": 0
+    },
+    {
+      "name": "统计分析（analyze）",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["main.py", "analyze"],
+      "port": 0
+    },
+    {
+      "name": "回测评估（backtest）",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["main.py", "backtest", "--periods", "50"],
+      "port": 0
+    },
+    {
+      "name": "生成综合报告（report）",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["main.py", "report"],
+      "port": 0
+    },
+    {
+      "name": "定时守护进程（daemon）",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["main.py", "daemon", "--run-now"],
+      "port": 0
+    },
+    {
+      "name": "运行单元测试",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "pytest", "tests/", "-v"],
+      "port": 0
+    }
+  ]
+}

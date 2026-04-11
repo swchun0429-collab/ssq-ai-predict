@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+env/
+
+# 数据文件（历史数据可从网络重新抓取）
+data/ssq_history.csv
+data/prediction_history.csv
+
+# 用户购彩记录（个人隐私，不上传）
+data/purchases.json
+
+# 训练好的模型（体积较大，可重新训练）
+models/*.pkl
+models/*.joblib
+
+# 日志
+logs/
+*.log
+
+# 报告输出
+reports/
+
+# Claude Code 本地配置（不含 launch.json）
+.claude/settings.local.json
+
+# IDE / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 环境变量
+.env
+.env.*
