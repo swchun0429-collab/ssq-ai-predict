@@ -99,7 +99,8 @@ def cmd_init(args) -> int:
         print(f"    - {issue}")
 
     # 启动内置 HTTP 控制面板，保持进程存活
-    _start_dashboard(port=getattr(args, "port", 3000))
+    port = int(os.environ.get("PORT", getattr(args, "port", 3000)))
+    _start_dashboard(port=port)
     return 0
 
 
@@ -129,6 +130,52 @@ def _start_dashboard(port: int = 3000) -> None:
 
     RED_COLS = ["r1", "r2", "r3", "r4", "r5", "r6"]
     PURCHASES_FILE = DATA_DIR / "purchases.json"
+    TOKENS_FILE = DATA_DIR / "paid_tokens.json"
+    ADMIN_KEY = os.environ.get("ADMIN_KEY", "ssq-admin-2024")
+
+    # ── Token 管理 ───────────────────────────────────────
+    def load_tokens() -> dict:
+        if TOKENS_FILE.exists():
+            try:
+                with open(TOKENS_FILE, "r", encoding="utf-8") as f:
+                    return _json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def save_tokens(tokens: dict):
+        TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(TOKENS_FILE, "w", encoding="utf-8") as f:
+            _json.dump(tokens, f, ensure_ascii=False, indent=2)
+
+    def generate_token(plan: str = "monthly") -> str:
+        import uuid, time
+        now = time.time()
+        expire = {
+            "trial": now + 3600,          # 1小时试用
+            "once": now + 86400,           # 24小时单次
+            "monthly": now + 86400 * 30,   # 30天
+            "yearly": now + 86400 * 365,   # 年度
+            "lifetime": now + 86400 * 36500,
+        }.get(plan, now + 86400 * 30)
+        tok = str(uuid.uuid4()).replace("-", "")[:20].upper()
+        tokens = load_tokens()
+        tokens[tok] = {"plan": plan, "expire": expire, "created": now, "uses": 0}
+        save_tokens(tokens)
+        return tok
+
+    def verify_token(tok: str) -> dict:
+        import time
+        tokens = load_tokens()
+        if tok not in tokens:
+            return {"valid": False, "msg": "无效Token"}
+        t = tokens[tok]
+        if time.time() > t["expire"]:
+            return {"valid": False, "msg": "Token已过期"}
+        t["uses"] = t.get("uses", 0) + 1
+        save_tokens(tokens)
+        return {"valid": True, "plan": t["plan"],
+                "expire": t["expire"], "uses": t["uses"]}
 
     # ── 共享状态（线程安全用锁）─────────────────────────────
     state_lock = threading.Lock()
@@ -2292,12 +2339,145 @@ function render(d){
     </div>`;
 }
 
-load();
+/* ═══ Paywall Modal ═══ */
+.pw-overlay{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,0.75);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.pw-card{position:relative;width:min(480px,92vw);border-radius:28px;overflow:hidden;
+  background:rgba(28,28,30,0.92);border:1px solid rgba(255,255,255,.15);
+  box-shadow:0 32px 80px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.12);
+  padding:36px 32px 28px}
+.pw-card::before{content:'';position:absolute;top:0;left:10%;right:10%;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent)}
+.pw-aurora{position:absolute;top:-60px;right:-60px;width:200px;height:200px;border-radius:50%;
+  background:radial-gradient(circle,rgba(10,132,255,.35),transparent 70%);filter:blur(40px);pointer-events:none}
+.pw-aurora2{position:absolute;bottom:-40px;left:-40px;width:160px;height:160px;border-radius:50%;
+  background:radial-gradient(circle,rgba(191,90,242,.3),transparent 70%);filter:blur(40px);pointer-events:none}
+.pw-lock{font-size:40px;text-align:center;margin-bottom:8px}
+.pw-title{font-size:22px;font-weight:700;text-align:center;
+  background:linear-gradient(135deg,#fff,rgba(255,255,255,.7));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:6px}
+.pw-sub{font-size:13px;color:rgba(255,255,255,.45);text-align:center;margin-bottom:24px;line-height:1.6}
+.pw-plans{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px}
+.pw-plan{border-radius:14px;padding:14px 12px;border:1px solid rgba(255,255,255,.1);
+  background:rgba(255,255,255,.05);cursor:pointer;transition:all .2s;text-align:center}
+.pw-plan:hover,.pw-plan.selected{border-color:var(--blue);background:rgba(10,132,255,.12);
+  box-shadow:0 0 16px rgba(10,132,255,.25)}
+.pw-plan .plan-name{font-size:11px;color:rgba(255,255,255,.5);margin-bottom:4px}
+.pw-plan .plan-price{font-size:20px;font-weight:700;color:#fff}
+.pw-plan .plan-desc{font-size:10px;color:rgba(255,255,255,.35);margin-top:2px}
+.pw-plan.featured{border-color:var(--purple);background:rgba(191,90,242,.1)}
+.pw-plan.featured:hover,.pw-plan.featured.selected{border-color:var(--purple);background:rgba(191,90,242,.18);
+  box-shadow:0 0 16px rgba(191,90,242,.3)}
+.pw-divider{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.pw-divider::before,.pw-divider::after{content:'';flex:1;height:1px;background:rgba(255,255,255,.1)}
+.pw-divider span{font-size:11px;color:rgba(255,255,255,.3)}
+.pw-input{width:100%;padding:12px 16px;border-radius:12px;border:1px solid rgba(255,255,255,.12);
+  background:rgba(255,255,255,.06);color:#fff;font-size:14px;font-family:monospace;
+  letter-spacing:1px;outline:none;transition:border-color .2s}
+.pw-input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(10,132,255,.15)}
+.pw-input::placeholder{color:rgba(255,255,255,.25);letter-spacing:0;font-family:inherit}
+.pw-btn{width:100%;padding:14px;border-radius:14px;border:none;cursor:pointer;
+  font-size:15px;font-weight:600;color:#fff;margin-top:12px;
+  background:linear-gradient(135deg,var(--blue),var(--purple));
+  box-shadow:0 0 20px rgba(10,132,255,.3);transition:all .25s;font-family:inherit}
+.pw-btn:hover{box-shadow:0 0 30px rgba(10,132,255,.5);transform:translateY(-1px)}
+.pw-err{text-align:center;font-size:12px;color:var(--red);margin-top:8px;min-height:18px}
+.pw-note{text-align:center;font-size:10px;color:rgba(255,255,255,.2);margin-top:12px;line-height:1.7}
+.pw-note a{color:rgba(10,132,255,.7);text-decoration:none}
+</style>
+<!-- paywall styles injected above -->
+<style>
+/* override: paywall styles were above, nothing here */
+</style>
+<div id="paywall" class="pw-overlay" style="display:none">
+  <div class="pw-card">
+    <div class="pw-aurora"></div>
+    <div class="pw-aurora2"></div>
+    <div class="pw-lock">🔐</div>
+    <div class="pw-title">解锁 AI 智能推荐</div>
+    <div class="pw-sub">基于贝叶斯 · 马尔科夫 · 集成模型<br>综合置信度评分 · 每期精选推荐</div>
+    <div class="pw-plans">
+      <div class="pw-plan" id="plan-once" onclick="selectPlan('once')">
+        <div class="plan-name">单次体验</div>
+        <div class="plan-price">¥9.9</div>
+        <div class="plan-desc">有效期 24 小时</div>
+      </div>
+      <div class="pw-plan featured" id="plan-monthly" onclick="selectPlan('monthly')">
+        <div class="plan-name">⭐ 月度会员</div>
+        <div class="plan-price">¥29.9</div>
+        <div class="plan-desc">有效期 30 天</div>
+      </div>
+      <div class="pw-plan" id="plan-yearly" onclick="selectPlan('yearly')">
+        <div class="plan-name">年度会员</div>
+        <div class="plan-price">¥199</div>
+        <div class="plan-desc">有效期 365 天</div>
+      </div>
+      <div class="pw-plan" id="plan-lifetime" onclick="selectPlan('lifetime')">
+        <div class="plan-name">永久会员</div>
+        <div class="plan-price">¥499</div>
+        <div class="plan-desc">无限期使用</div>
+      </div>
+    </div>
+    <div class="pw-divider"><span>付款后输入收到的 Token</span></div>
+    <input class="pw-input" id="pw-token" placeholder="粘贴您的访问 Token（如 A3F8B2...）" maxlength="24">
+    <button class="pw-btn" onclick="submitToken()">验 证 并 解 锁</button>
+    <div class="pw-err" id="pw-err"></div>
+    <div class="pw-note">
+      付款请联系管理员获取 Token<br>
+      已有 Token？直接粘贴上方即可 · <a href="/">返回主页</a>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Paywall logic
+let _selectedPlan = 'monthly';
+function selectPlan(p){
+  _selectedPlan=p;
+  document.querySelectorAll('.pw-plan').forEach(el=>el.classList.remove('selected'));
+  document.getElementById('plan-'+p).classList.add('selected');
+}
+selectPlan('monthly');
+
+function showPaywall(){document.getElementById('paywall').style.display='flex';}
+function hidePaywall(){document.getElementById('paywall').style.display='none';}
+
+function submitToken(){
+  const tok = document.getElementById('pw-token').value.trim();
+  if(!tok){document.getElementById('pw-err').textContent='请输入 Token';return;}
+  document.getElementById('pw-err').textContent='验证中…';
+  fetch('/api/verify-token',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({token:tok})})
+  .then(r=>r.json()).then(d=>{
+    if(d.valid){
+      localStorage.setItem('ssq_token', tok);
+      hidePaywall();
+      load();
+    } else {
+      document.getElementById('pw-err').textContent='❌ '+d.msg;
+    }
+  }).catch(()=>document.getElementById('pw-err').textContent='网络错误，请重试');
+}
+
+function checkAccess(cb){
+  const tok = localStorage.getItem('ssq_token');
+  if(!tok){showPaywall();return;}
+  fetch('/api/verify-token',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({token:tok})})
+  .then(r=>r.json()).then(d=>{
+    if(d.valid){cb();}
+    else{localStorage.removeItem('ssq_token');showPaywall();}
+  }).catch(()=>cb()); // 网络异常时放行避免误拦
+}
+
+// ── original page logic (modified to require token)
+</script>
+<script>
+checkAccess(load);
 </script>
 </body>
 </html>"""
 
-    # ── 统计分析页面 ──────────────────────────────────────
     def render_stats_html() -> str:
         return r"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -2542,6 +2722,65 @@ load();
 </body>
 </html>"""
 
+    # ── 管理员页面 ────────────────────────────────────────
+    def render_admin_html() -> str:
+        return r"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>管理后台</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,'PingFang SC',sans-serif;background:#0a0a0f;color:#e0e0e0;min-height:100vh;padding:24px}
+h2{font-size:18px;font-weight:700;margin-bottom:20px;background:linear-gradient(135deg,#0a84ff,#bf5af2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.card{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:24px;margin-bottom:16px;max-width:560px}
+label{display:block;font-size:12px;color:rgba(255,255,255,.5);margin-bottom:5px}
+input,select{width:100%;padding:10px 14px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#fff;font-size:14px;margin-bottom:14px;outline:none;font-family:inherit}
+button{padding:12px 24px;border-radius:10px;border:none;cursor:pointer;font-size:14px;font-weight:600;background:linear-gradient(135deg,#0a84ff,#bf5af2);color:#fff;width:100%;font-family:inherit;transition:all .2s}
+button:hover{transform:translateY(-1px);box-shadow:0 0 24px rgba(10,132,255,.4)}
+.result{margin-top:14px;padding:14px;background:rgba(0,0,0,.4);border-radius:10px;font-family:monospace;font-size:13px;color:#32d74b;border:1px solid rgba(50,215,75,.2);display:none}
+.result.err{color:#ff375f;border-color:rgba(255,55,95,.2)}
+.tok{display:flex;align-items:center;gap:8px;padding:7px 10px;background:rgba(10,132,255,.08);border:1px solid rgba(10,132,255,.2);border-radius:7px;margin-bottom:5px}
+.tok span{flex:1;font-family:monospace;font-size:13px}
+.cpbtn{padding:3px 10px;background:rgba(10,132,255,.2);border:1px solid rgba(10,132,255,.4);color:#5ac8fa;border-radius:6px;cursor:pointer;font-size:11px;flex-shrink:0;font-family:inherit;width:auto}
+a.back{color:rgba(255,255,255,.35);font-size:12px;display:block;margin-bottom:16px;text-decoration:none}
+a.back:hover{color:#0a84ff}
+</style></head><body>
+<a href="/" class="back">← 返回主页</a>
+<h2>⚙️ 管理后台 · Token 管理</h2>
+<div class="card">
+  <label>管理员密钥（ADMIN_KEY 环境变量）</label>
+  <input id="ak" type="password" placeholder="输入管理员密钥">
+  <label>套餐</label>
+  <select id="pl">
+    <option value="trial">试用 1小时</option>
+    <option value="once">单次 24小时</option>
+    <option value="monthly" selected>月度 30天</option>
+    <option value="yearly">年度 365天</option>
+    <option value="lifetime">永久</option>
+  </select>
+  <label>生成数量</label>
+  <input id="cnt" type="number" value="1" min="1" max="50">
+  <button onclick="gen()">生成 Token</button>
+  <div id="res" class="result"></div>
+</div>
+<script>
+function gen(){
+  const ak=document.getElementById('ak').value.trim();
+  if(!ak){alert('请输入密钥');return;}
+  const pl=document.getElementById('pl').value;
+  const cnt=parseInt(document.getElementById('cnt').value)||1;
+  fetch('/api/admin/generate-token',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({admin_key:ak,plan:pl,count:cnt})})
+  .then(r=>r.json()).then(d=>{
+    const el=document.getElementById('res');
+    el.style.display='block';
+    if(!d.ok){el.className='result err';el.textContent='❌ '+d.msg;return;}
+    el.className='result';
+    el.innerHTML='✅ 已生成 '+d.tokens.length+' 个Token  套餐：'+d.plan+'  有效期：'+d.expire+'\n\n'
+      +d.tokens.map((t,i)=>`<div class="tok"><span>${i+1}. ${t}</span>
+        <button class="cpbtn" onclick="navigator.clipboard.writeText('${t}').then(()=>this.textContent='✓已复制')">复制</button></div>`).join('');
+  }).catch(()=>{const el=document.getElementById('res');el.style.display='block';el.className='result err';el.textContent='网络错误';});
+}
+</script></body></html>"""
+
     # ── HTTP 请求处理器 ───────────────────────────────────
     class Handler(BaseHTTPRequestHandler):
         def _send_json(self, data: dict, code: int = 200):
@@ -2600,6 +2839,8 @@ load();
             elif path == "/api/cooccur-data":
                 n = int(qs.get("n", [0])[0])
                 self._send_json(get_cooccur_data(n))
+            elif path == "/admin":
+                self._send_html(render_admin_html())
             else:
                 self._send_html(render_html())
 
@@ -2614,6 +2855,23 @@ load();
                 self._handle_result()
             elif path == "/api/delete":
                 self._handle_delete()
+            elif path == "/api/verify-token":
+                data = self._read_body()
+                result = verify_token(str(data.get("token", "")))
+                self._send_json(result)
+            elif path == "/api/admin/generate-token":
+                data = self._read_body()
+                if data.get("admin_key") != ADMIN_KEY:
+                    self._send_json({"ok": False, "msg": "Unauthorized"}, 403)
+                    return
+                plan = data.get("plan", "monthly")
+                count = max(1, int(data.get("count", 1)))
+                import time
+                tokens_out = [generate_token(plan) for _ in range(count)]
+                expire_days = {"trial": "1h", "once": "24h", "monthly": "30天",
+                               "yearly": "365天", "lifetime": "永久"}.get(plan, "30天")
+                self._send_json({"ok": True, "tokens": tokens_out,
+                                 "plan": plan, "expire": expire_days})
             else:
                 self._send_json({"ok": False, "msg": "Unknown endpoint"}, 404)
 

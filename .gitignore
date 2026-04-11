@@ -20,6 +20,9 @@ data/prediction_history.csv
 # 用户购彩记录（个人隐私，不上传）
 data/purchases.json
 
+# Token 数据库（服务端运行时生成）
+data/paid_tokens.json
+
 # 训练好的模型（体积较大，可重新训练）
 models/*.pkl
 models/*.joblib
