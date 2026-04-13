@@ -518,13 +518,19 @@ pre{{background:#1a1a2e;color:#e0e0e0;padding:16px;border-radius:8px;font-size:1
   <!-- 右：频率 -->
   <div>
     <h2>🔥 红球频率 Top10</h2>
-    <div class="card">{top_red_html}</div>
+    <div class="card"><span id="top-red-balls">{top_red_html}</span></div>
     <h2>🔵 蓝球频率 Top5</h2>
-    <div class="card">{top_blue_html}</div>
+    <div class="card"><span id="top-blue-balls">{top_blue_html}</span></div>
   </div>
 </div>
 
-{pred_html}
+<section id="pred-section"{' style="display:none"' if not pred_html else ''}>
+  <h2>🎯 最新预测</h2>
+  <div class="card" style="position:relative">
+    <pre id="pred-text" style="white-space:pre-wrap;font-size:12px;line-height:1.9;color:#2c3e50;font-family:'PingFang SC',monospace">{pred_html}</pre>
+    <a href="/recommend" style="position:absolute;top:12px;right:14px;padding:5px 14px;background:linear-gradient(135deg,#c0392b,#8e44ad);color:#fff;border-radius:6px;text-decoration:none;font-size:12px;font-weight:bold">查看完整AI推荐 →</a>
+  </div>
+</section>
 
 <!-- 购彩录入 -->
 <h2>📝 录入本次购彩</h2>
@@ -664,6 +670,53 @@ function post(url, data){{
   return fetch(url,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(data)}}).then(r=>r.json());
 }}
 
+// ── 应用快照数据到 DOM ────────────────────────────────
+function applySnapshot(d){{
+  if(d.total) document.getElementById('stat-total').textContent=d.total;
+  if(d.max_issue) document.getElementById('stat-latest').textContent=d.max_issue;
+  if(d.latest_html){{
+    const tb=document.getElementById('latest-tbody');
+    if(tb) tb.innerHTML=d.latest_html;
+  }}
+  if(d.top_red_html){{
+    const el=document.getElementById('top-red-balls');
+    if(el) el.innerHTML=d.top_red_html;
+  }}
+  if(d.top_blue_html){{
+    const el=document.getElementById('top-blue-balls');
+    if(el) el.innerHTML=d.top_blue_html;
+  }}
+  if(d.pred_html){{
+    const pt=document.getElementById('pred-text');
+    if(pt){{
+      pt.textContent=d.pred_html;
+      const sec=document.getElementById('pred-section');
+      if(sec) sec.style.display='';
+    }} else {{
+      // 首次注入预测区块
+      const main=document.querySelector('main')||document.body;
+      const pcard=document.getElementById('pred-card-wrap');
+      if(!pcard){{
+        const wrap=document.createElement('section');
+        wrap.id='pred-section';
+        wrap.innerHTML='<h2>🎯 最新预测</h2><div class="card"><pre id="pred-text" style="white-space:pre-wrap;font-size:12px;line-height:1.8;color:#2c3e50">'+d.pred_html+'</pre></div>';
+        const purchaseSection=document.querySelector('h2');
+        if(purchaseSection) main.insertBefore(wrap,purchaseSection);
+        else main.prepend(wrap);
+      }}
+    }}
+  }}
+  if(d.max_date){{
+    const el=document.getElementById('refresh-status');
+    if(el && !el.textContent.includes('刷新')) el.textContent='数据截至：'+d.max_date;
+  }}
+}}
+
+// ── 页面加载时拉取实时快照 ────────────────────────────
+(function loadSnapshot(){{
+  fetch('/api/snapshot').then(r=>r.json()).then(applySnapshot).catch(()=>{{}});
+}})();
+
 // ── 刷新数据 ─────────────────────────────────────────
 function doRefresh(){{
   const btn=document.getElementById('btn-refresh');
@@ -671,19 +724,18 @@ function doRefresh(){{
   const status=document.getElementById('refresh-status');
   btn.disabled=true;
   icon.textContent='⏳'; icon.classList.add('spin');
-  status.textContent='正在拉取最新开奖数据…';
+  status.textContent='正在拉取最新开奖数据及重新计算预测…';
   fetch('/api/refresh',{{method:'POST'}})
     .then(r=>r.json())
     .then(d=>{{
       if(d.ok){{
         let msg='刷新完成 ✓  新增 '+d.new_periods+' 期，最新期号 '+d.max_issue;
-        if(d.auto_matched>0) msg+='，自动核销 '+d.auto_matched+' 条购彩记录';
+        if(d.auto_matched>0) msg+='，自动核销 '+d.auto_matched+' 条';
         status.textContent=msg;
-        document.getElementById('stat-total').textContent=d.total;
-        document.getElementById('stat-latest').textContent=d.max_issue;
-        if(d.latest_html) document.getElementById('latest-tbody').innerHTML=d.latest_html;
-        if(d.auto_matched>0) setTimeout(()=>location.reload(),1200);
-        toast('✓ 数据已更新，新增 '+d.new_periods+' 期'+(d.auto_matched>0?' | 自动核销 '+d.auto_matched+' 条':''));
+        // 动态更新所有区块（无需整页刷新）
+        applySnapshot(d);
+        toast('✓ 数据及预测已更新，新增 '+d.new_periods+' 期'+(d.auto_matched>0?' | 核销 '+d.auto_matched+' 条':''));
+        if(d.auto_matched>0) setTimeout(()=>location.reload(),1500);
       }}else{{
         status.textContent='刷新失败：'+d.msg;
         toast('⚠ '+d.msg, 3500);
@@ -2842,6 +2894,8 @@ function gen(){
                 self._send_json(get_cooccur_data(n))
             elif path == "/admin":
                 self._send_html(render_admin_html())
+            elif path == "/api/snapshot":
+                self._handle_snapshot()
             else:
                 self._send_html(render_html())
 
@@ -2876,6 +2930,76 @@ function gen(){
             else:
                 self._send_json({"ok": False, "msg": "Unknown endpoint"}, 404)
 
+        def _build_live_snapshot(self) -> dict:
+            """构建实时快照（供 /api/snapshot 和刷新后返回）。"""
+            snap = build_snapshot()
+            red_cols_local = ["r1", "r2", "r3", "r4", "r5", "r6"]
+
+            def bh(nums, cls):
+                return "".join(f'<span class="{cls}">{int(n):02d}</span>' for n in nums)
+
+            latest10 = snap.get("latest10", [])
+            rows_html = ""
+            for r in reversed(latest10):
+                reds = bh([r[c] for c in red_cols_local], "red")
+                blue = f'<span class="blue">{int(r["blue"]):02d}</span>'
+                rows_html += f"<tr><td>{r['issue']}</td><td>{r['date']}</td><td>{reds}</td><td>{blue}</td></tr>"
+
+            top_red_html = "".join(
+                f'<span class="red">{n:02d}</span><small class="freq-cnt">×{cnt}</small> '
+                for n, cnt in snap.get("top10_red", [])
+            )
+            top_blue_html = "".join(
+                f'<span class="blue">{n:02d}</span><small class="freq-cnt">×{cnt}</small> '
+                for n, cnt in snap.get("top5_blue", [])
+            )
+
+            # 实时生成轻量预测（无需ML模型，纯统计）
+            pred_html = ""
+            try:
+                rec = get_recommend_data(n=100)
+                combos = rec.get("combos", [])[:5]
+                alerts = rec.get("alerts", [])
+                last_blue = rec.get("last_blue", "?")
+                bp = rec.get("blue_probs", {})
+                top_blue_pred = sorted(bp.items(), key=lambda x: x[1], reverse=True)[:3]
+
+                lines = []
+                lines.append(f"▶ 基于近100期综合分析（贝叶斯·遗漏·动量）")
+                if alerts:
+                    ab = "、".join(f"{a['ball']:02d}（遗漏{a['miss']}期）" for a in alerts[:4])
+                    lines.append(f"⚡ 超长遗漏预警：{ab}")
+                lines.append(f"🔵 蓝球高概率：" + "  ".join(f"{b}号{p}%" for b, p in top_blue_pred))
+                lines.append("")
+                lines.append("▶ 推荐号码（按综合置信度排序）：")
+                for i, c in enumerate(combos, 1):
+                    red_str = " ".join(f"{b:02d}" for b in c["red"])
+                    lines.append(
+                        f"  第{i:02d}注：红球[{red_str}] + 蓝球[{c['blue']:02d}]  "
+                        f"和值:{c['sum']}  {c['odd_even']}  三区{c['z1']}/{c['z2']}/{c['z3']}  {c['balance']}"
+                    )
+                pred_text = "\n".join(lines)
+                pred_html = pred_text
+            except Exception as ex:
+                logger.warning("实时预测生成失败：%s", ex)
+                pred_html = snap.get("pred_content", "")
+
+            return {
+                "total": snap.get("total", 0),
+                "max_issue": str(snap.get("max_issue", "")),
+                "max_date": str(snap.get("max_date", "")),
+                "latest_html": rows_html,
+                "top_red_html": top_red_html,
+                "top_blue_html": top_blue_html,
+                "pred_html": pred_html,
+            }
+
+        def _handle_snapshot(self):
+            try:
+                self._send_json(self._build_live_snapshot())
+            except Exception as e:
+                self._send_json({"error": str(e)})
+
         def _handle_refresh(self):
             with state_lock:
                 if state["refreshing"]:
@@ -2893,24 +3017,18 @@ function gen(){
                 # 自动对照开奖号码，更新未核销的购彩记录
                 auto_matched = _auto_check_results(df)
 
-                # 构建最新10行 HTML
-                red_cols_local = ["r1", "r2", "r3", "r4", "r5", "r6"]
-                def b(nums, cls):
-                    return "".join(f'<span class="{cls}">{int(n):02d}</span>' for n in nums)
-
-                latest10 = df.tail(10).to_dict(orient="records")
-                rows_html = ""
-                for r in reversed(latest10):
-                    reds = b([r[c] for c in red_cols_local], "red")
-                    blue = f'<span class="blue">{int(r["blue"]):02d}</span>'
-                    rows_html += f"<tr><td>{r['issue']}</td><td>{r['date']}</td><td>{reds}</td><td>{blue}</td></tr>"
+                # 构建实时快照（含最新预测）
+                snap = self._build_live_snapshot()
 
                 self._send_json({
                     "ok": True,
                     "new_periods": new_count,
                     "total": len(df),
-                    "max_issue": df["issue"].max(),
-                    "latest_html": rows_html,
+                    "max_issue": str(df["issue"].max()),
+                    "latest_html": snap["latest_html"],
+                    "top_red_html": snap["top_red_html"],
+                    "top_blue_html": snap["top_blue_html"],
+                    "pred_html": snap["pred_html"],
                     "auto_matched": auto_matched,
                 })
             except Exception as e:
